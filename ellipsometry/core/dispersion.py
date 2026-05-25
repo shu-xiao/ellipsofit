@@ -546,13 +546,51 @@ class Pole:
 
 @dataclass
 class GenOscOscillator:
-    """單一振盪器（GenOsc 用）"""
+    """單一振盪器（GenOsc 用）
+
+    參數依類型而異（對應 WVASE GenOsc style strings）：
+        lorentz / gaussian / harmonic:  (amp, en, br)  3 參數
+        drude:                          (amp, br)      2 參數，無 en（共振在 E=0）
+                                                       amp = ωp² (eV²), br = Γ (eV)
+        tauc_lorentz:                   (amp, en, br, Eg)  4 參數，Eg 為 bandgap
+
+    無關參數會被忽略（不影響計算）。
+    """
     type: str             # 'lorentz' / 'gaussian' / 'drude' / 'tauc_lorentz' / 'harmonic'
-    amp: float            # Amp
-    en: float             # En (eV)
-    br: float             # Br (eV)
+    amp: float            # Amp（所有類型都有）
+    en: float = 0.0       # En (eV)（Drude 不用）
+    br: float = 0.0       # Br (eV)（所有類型都有；Drude 為 Γ 阻尼）
     active: bool = True
     Eg: float = 0.0       # 只有 Tauc-Lorentz 用
+
+
+# 每種振盪器需要的參數（GUI 與驗證用）
+OSC_PARAMS = {
+    'lorentz':       ['amp', 'en', 'br'],
+    'gaussian':      ['amp', 'en', 'br'],
+    'harmonic':      ['amp', 'en', 'br'],
+    'drude':         ['amp', 'br'],          # ⚠️ Drude 無 En
+    'tauc_lorentz':  ['amp', 'en', 'br', 'Eg'],
+}
+
+# 參數標籤（GUI 顯示用）：(顯示名稱, 單位, 物理意義)
+PARAM_LABELS_GENERIC = {
+    'amp': ('Amp', '',   'Amplitude (振幅)'),
+    'en':  ('En',  'eV', 'Center energy (中心能量)'),
+    'br':  ('Br',  'eV', 'Broadening FWHM (展寬)'),
+    'Eg':  ('Eg',  'eV', 'Tauc bandgap (能隙)'),
+}
+
+# Drude 專用標籤（物理意義不同）
+PARAM_LABELS_DRUDE = {
+    'amp': ('Amp', 'eV²', 'ωp² plasma frequency squared'),
+    'br':  ('Br',  'eV',  'Γ damping (Drude 阻尼)'),
+}
+
+
+def osc_param_labels(osc_type: str) -> dict:
+    """取得振盪器類型對應的參數標籤 dict"""
+    return PARAM_LABELS_DRUDE if osc_type == 'drude' else PARAM_LABELS_GENERIC
 
 
 @dataclass

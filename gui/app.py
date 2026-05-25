@@ -31,7 +31,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from ellipsometry.core.io import read_reflection, read_transmission
-from ellipsometry.core.dispersion import MaterialLibrary
+from ellipsometry.core.dispersion import MaterialLibrary, OSC_PARAMS, osc_param_labels
 from ellipsometry.core.fitter import Fitter
 
 
@@ -276,12 +276,13 @@ with st.sidebar:
             sio2_d = st.number_input('熱氧化 SiO2 厚度 (nm)', value=285.0, min_value=1.0, max_value=10000.0)
             fit_sio2 = st.checkbox('擬合 SiO2 厚度', value=False)
 
-        substrate_d = st.number_input(
-            '基板厚度 (nm)', value=1_000_000.0,
-            min_value=1000.0, max_value=1e8, step=100000.0,
-            format='%.0f',
-            help='典型 wafer 1 mm = 1000000 nm。透明基板會走非相干疊加。',
+        substrate_d_mm = st.number_input(
+            '基板厚度 (mm)', value=1.0,
+            min_value=0.001, max_value=100.0, step=0.1,
+            format='%.3f',
+            help='典型 Si wafer ≈ 0.5 mm，玻璃 1 mm。透明基板會走非相干疊加。',
         )
+        substrate_d = substrate_d_mm * 1_000_000.0   # 轉成 nm 給內部使用
 
     # ----- 4. 薄膜（多層支援）-----
     with st.expander(f'🎬 4. 薄膜（共 {len(st.session_state.films)} 層）', expanded=True):
@@ -413,21 +414,38 @@ with st.sidebar:
                             with cc3:
                                 osc['fit'] = st.checkbox('🔧 擬合', value=osc['fit'],
                                                          key=f'{kp}ofit_{i}')
-                            # 三參數 + bounds
-                            for pname, lo_def, hi_def in [
-                                ('amp', 0.0, 10.0), ('en', 0.5, 6.5), ('br', 0.05, 2.0)]:
+                            # 依振盪器類型顯示對應的參數欄
+                            needed = OSC_PARAMS[osc['type']]
+                            labels = osc_param_labels(osc['type'])
+                            # 確保 bounds dict 有需要的 key
+                            default_bounds = {
+                                'amp': [0.0, 100.0] if osc['type'] == 'drude' else [0.0, 10.0],
+                                'en':  [0.5, 6.5],
+                                'br':  [0.01, 5.0] if osc['type'] == 'drude' else [0.05, 2.0],
+                                'Eg':  [0.0, 5.0],
+                            }
+                            for pname in needed:
+                                osc.setdefault(pname, 0.0)
+                                if pname not in osc.get('bounds', {}):
+                                    osc.setdefault('bounds', {})
+                                    osc['bounds'][pname] = list(default_bounds[pname])
+
+                                disp_name, unit, meaning = labels.get(pname,
+                                    (pname.title(), '', ''))
+                                label_str = f'{disp_name} ({unit})' if unit else disp_name
                                 pc1, pc2, pc3 = st.columns([2, 1, 1])
                                 with pc1:
                                     osc[pname] = st.number_input(
-                                        f'{pname.title()} ({"eV" if pname!="amp" else ""})',
-                                        value=osc[pname], key=f'{kp}o{pname}_{i}')
+                                        label_str, value=float(osc[pname]),
+                                        key=f'{kp}o{pname}_{i}', help=meaning,
+                                    )
                                 with pc2:
                                     osc['bounds'][pname][0] = st.number_input(
-                                        f'下限', value=osc['bounds'][pname][0],
+                                        '下限', value=float(osc['bounds'][pname][0]),
                                         key=f'{kp}o{pname}lo_{i}', label_visibility='collapsed')
                                 with pc3:
                                     osc['bounds'][pname][1] = st.number_input(
-                                        f'上限', value=osc['bounds'][pname][1],
+                                        '上限', value=float(osc['bounds'][pname][1]),
                                         key=f'{kp}o{pname}hi_{i}', label_visibility='collapsed')
 
     # ----- 6. 擬合設定 -----
@@ -580,14 +598,17 @@ def build_config():
             mat = film['material_builtin']
         else:
             go_cfg = film['gen_osc']
-            # 收集要 fit 的 paths + bounds
+            # 依振盪器類型只收集需要的參數做 fit
             fit_paths = ['e1_offset']
             bounds = {}
             for i, osc in enumerate(go_cfg['oscillators']):
-                if osc['fit']:
-                    for pname in ('amp', 'en', 'br'):
+                needed_params = OSC_PARAMS[osc['type']]
+                if osc.get('fit', True):
+                    for pname in needed_params:
                         fit_paths.append(f'oscillators[{i}].{pname}')
-                        bounds[f'oscillators[{i}].{pname}'] = list(osc['bounds'][pname])
+                        if pname in osc.get('bounds', {}):
+                            bounds[f'oscillators[{i}].{pname}'] = list(osc['bounds'][pname])
+
             mat = {
                 'model': 'gen_osc',
                 'layer': {
@@ -595,14 +616,16 @@ def build_config():
                     'egap': go_cfg['egap'],
                     'poles': {},
                 },
+                # 振盪器只塞需要的欄位（避免 Drude 的 en 被當作有意義的初始值）
                 'oscillators': [
-                    {'type': o['type'], 'amp': o['amp'], 'en': o['en'], 'br': o['br'],
-                     'active': o['active']} for o in go_cfg['oscillators']
+                    {**{'type': o['type'], 'active': o.get('active', True)},
+                     **{p: o.get(p, 0.0) for p in OSC_PARAMS[o['type']]}}
+                    for o in go_cfg['oscillators']
                 ],
                 'params': {
                     'e1_offset': go_cfg['e1_offset'],
                     'oscillators': [
-                        {'amp': o['amp'], 'en': o['en'], 'br': o['br']}
+                        {p: o.get(p, 0.0) for p in OSC_PARAMS[o['type']]}
                         for o in go_cfg['oscillators']
                     ],
                 },
@@ -787,17 +810,64 @@ else:
                            height=300, hovermode='x unified')
         st.plotly_chart(figT, use_container_width=True)
 
-    # ---- n, k 色散 ----
-    st.subheader('📊 薄膜 n, k 色散')
-    # 找目標層（第二層，即首個薄膜）
+    # ---- 薄膜光學常數 ----
+    from ellipsometry.core.tmm_calc import pseudo_epsilon
+    from ellipsometry.core.units import nm_to_eV
+
+    st.subheader('📊 光學常數')
+
+    # 薄膜（第二層）
     film_layer = result.layers[1]
-    n, k = film_layer.material.n_k(result.wavelength)
-    fig_nk = make_subplots(rows=1, cols=2, subplot_titles=('n', 'k'))
-    fig_nk.add_trace(go.Scatter(x=result.wavelength, y=n, name='n', line=dict(width=2)), row=1, col=1)
-    fig_nk.add_trace(go.Scatter(x=result.wavelength, y=k, name='k', line=dict(width=2)), row=1, col=2)
-    fig_nk.update_xaxes(title_text='Wavelength (nm)')
-    fig_nk.update_layout(height=350)
-    st.plotly_chart(fig_nk, use_container_width=True)
+    wl_arr = result.wavelength
+    n_f, k_f = film_layer.material.n_k(wl_arr)
+    eps_f = film_layer.material.epsilon(wl_arr)
+    E_arr = nm_to_eV(wl_arr)
+
+    tab_nk, tab_eps_film, tab_pseudo = st.tabs([
+        '薄膜 n, k', '薄膜 ε₁, ε₂', '量測 <ε> (pseudo)',
+    ])
+
+    with tab_nk:
+        fig_nk = make_subplots(rows=1, cols=2, subplot_titles=('n', 'k'))
+        fig_nk.add_trace(go.Scatter(x=wl_arr, y=n_f, name='n',
+                                     line=dict(width=2)), row=1, col=1)
+        fig_nk.add_trace(go.Scatter(x=wl_arr, y=k_f, name='k',
+                                     line=dict(width=2, color='#d62728')), row=1, col=2)
+        fig_nk.update_xaxes(title_text='Wavelength (nm)')
+        fig_nk.update_layout(height=380, hovermode='x unified')
+        st.plotly_chart(fig_nk, use_container_width=True)
+
+    with tab_eps_film:
+        # ε vs E (eV)
+        fig_eps = make_subplots(rows=1, cols=2, subplot_titles=('ε₁', 'ε₂'))
+        fig_eps.add_trace(go.Scatter(x=E_arr, y=eps_f.real, name='ε₁',
+                                      line=dict(width=2)), row=1, col=1)
+        fig_eps.add_trace(go.Scatter(x=E_arr, y=eps_f.imag, name='ε₂',
+                                      line=dict(width=2, color='#d62728')), row=1, col=2)
+        fig_eps.update_xaxes(title_text='Energy (eV)')
+        fig_eps.update_layout(height=380, hovermode='x unified',
+                              title='薄膜真實介電函數（從擬合模型）')
+        st.plotly_chart(fig_eps, use_container_width=True)
+
+    with tab_pseudo:
+        st.caption('偽介電函數 <ε> = 假設樣品是半無限均勻體反算的 ε。'
+                   '對薄膜+基板樣品**不是真實薄膜 ε**，但形狀與峰位置可信，'
+                   '用於決定振盪器數量。')
+        fig_pe = make_subplots(rows=1, cols=2, subplot_titles=('<ε₁>', '<ε₂>'))
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+        for j, ang in enumerate(result.angles):
+            eps_p = pseudo_epsilon(result.psi_meas[:, j], result.delta_meas[:, j],
+                                   ang, convention='tmm')
+            c = colors[j % len(colors)]
+            fig_pe.add_trace(go.Scatter(x=E_arr, y=eps_p.real,
+                                         name=f'AOI={ang}°', line=dict(color=c)),
+                              row=1, col=1)
+            fig_pe.add_trace(go.Scatter(x=E_arr, y=eps_p.imag,
+                                         name=f'AOI={ang}°', line=dict(color=c),
+                                         showlegend=False), row=1, col=2)
+        fig_pe.update_xaxes(title_text='Energy (eV)')
+        fig_pe.update_layout(height=380, hovermode='x unified')
+        st.plotly_chart(fig_pe, use_container_width=True)
 
     # ---- 參數表 ----
     st.subheader('📋 最佳化參數')
