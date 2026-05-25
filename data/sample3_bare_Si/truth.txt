@@ -1,0 +1,9 @@
+# Ground truth — fake data 產生時使用的真實參數
+
+wavelength_range_nm: [300, 2000]
+wavelength_step_nm: 10.000
+angles_deg: [65.0, 70.0, 75.0]
+
+layers (top to bottom):
+  - material: air         thickness_nm: inf         coherent: True
+  - material: Si          thickness_nm: 1000000     coherent: False
