@@ -6,10 +6,16 @@
 
 ## 快速啟動
 
-### Windows
+### Windows（推薦：透過 WSL 後台）
+雙擊 **`run_gui_wsl.bat`**
+- 在 WSL 背景跑 streamlit（最小化視窗）
+- 自動開瀏覽器 http://localhost:8501
+- 結束：執行 `stop_gui_wsl.bat` 或關掉最小化視窗
+
+### Windows（用 Windows 原生 Python）
 雙擊 `run_gui.bat`，瀏覽器開 http://localhost:8501
 
-### WSL2 / Linux / macOS
+### WSL2 / Linux / macOS（終端機）
 ```bash
 bash run_gui.sh
 ```

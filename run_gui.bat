@@ -1,12 +1,13 @@
 @echo off
-REM Windows 一鍵啟動 Streamlit GUI（Windows native Python）
-REM 用法：雙擊此檔，或在 cmd 執行 run_gui.bat
+chcp 65001 > nul
+REM Windows native Python launcher (no WSL)
+REM Usage: double-click this file, or run from cmd
 
 cd /d "%~dp0"
 echo ================================================
-echo  Ellipsometry Fit Tool - Streamlit GUI
+echo  ellipsofit GUI - Windows native Python
 echo ================================================
-echo  啟動中... 完成後請開瀏覽器：
+echo  Starting... open browser at:
 echo    http://localhost:8501
 echo ================================================
 echo.
