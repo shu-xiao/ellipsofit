@@ -434,6 +434,11 @@ with st.sidebar:
                                 'br':  [0.01, 5.0] if osc['type'] == 'drude' else [0.05, 2.0],
                                 'Eg':  [0.0, 5.0],
                             }
+                            # 表頭
+                            hc1, hc2, hc3 = st.columns([2, 1, 1])
+                            hc1.caption('參數 (初始值)')
+                            hc2.caption('min')
+                            hc3.caption('max')
                             for pname in needed:
                                 osc.setdefault(pname, 0.0)
                                 if pname not in osc.get('bounds', {}):
@@ -960,10 +965,12 @@ else:
             lines.append(f'  - k_coeffs = {[round(c, 4) for c in mat.k_coeffs]}')
         return '\n'.join(lines)
 
-    with st.expander('📐 擬合公式（每層使用的色散模型）', expanded=False):
+    st.subheader('📐 擬合公式')
+    with st.container(border=True):
         for i, ly in enumerate(result.layers):
             st.markdown(describe_layer(i, ly))
-            st.markdown('---')
+            if i < len(result.layers) - 1:
+                st.markdown('---')
 
     # ---- 參數表 ----
     st.subheader('📋 最佳化參數')
