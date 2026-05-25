@@ -1080,6 +1080,23 @@ else:
         except Exception:
             return ('?', pname, '', None)
 
+    def fmt(x, n=2):
+        """格式化：預設小數點後 2 位；極小或極大值改 scientific"""
+        if x is None:
+            return '—'
+        try:
+            xv = float(x)
+        except Exception:
+            return str(x)
+        if not np.isfinite(xv):
+            return '—'
+        ax = abs(xv)
+        if ax == 0:
+            return f'{0:.{n}f}'
+        if ax < 0.005 or ax >= 1e5:
+            return f'{xv:.2e}'
+        return f'{xv:.{n}f}'
+
     rows = []
     for pname, val in result.params.items():
         se = result.params_stderr.get(pname)
@@ -1096,12 +1113,12 @@ else:
         rows.append({
             'Layer': layer_name,
             'Parameter': human_param,
-            'Value': f'{val:.5g}',
+            'Value': fmt(val),
             'Unit': unit if unit else '—',
-            '± Uncertainty': f'{se:.3g}' if se else '—',
+            '± Uncertainty': fmt(se),
             'Rel %': f'{rel_unc:.2f}%' if rel_unc is not None else '—',
-            'Bound Lo': f'{lo:.4g}' if np.isfinite(lo) else '−∞',
-            'Bound Hi': f'{hi:.4g}' if np.isfinite(hi) else '+∞',
+            'Bound Lo': fmt(lo) if np.isfinite(lo) else '−∞',
+            'Bound Hi': fmt(hi) if np.isfinite(hi) else '+∞',
             'Fit?': '✓' if vary else 'fixed',
         })
     df_params = pd.DataFrame(rows)
