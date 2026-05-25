@@ -976,29 +976,51 @@ else:
     st.subheader('📋 最佳化參數')
 
     def parse_param_name(pname: str) -> tuple:
-        """L1__thickness → (Layer 1, thickness)
-           L1__oscillators_0__amp → (Layer 1, oscillators[0].amp)
+        """L1__thickness → (Layer 1, thickness, unit, osc_type)
+           L1__oscillators_0__amp → (Layer 1, oscillators[0].amp, unit, osc_type)
         """
         if not pname.startswith('L'):
-            return ('?', pname)
+            return ('?', pname, '', None)
         try:
             li_str, rest = pname[1:].split('__', 1)
             li = int(li_str)
-            # 把 oscillators_0__amp 還原成 oscillators[0].amp
             human = rest.replace('__', '.')
-            # _0 →[0] 等（簡單啟發式）
             import re
             human = re.sub(r'_(\d+)', r'[\1]', human)
             layer_name = result.layers[li].name if li < len(result.layers) else f'L{li}'
-            return (layer_name, human)
+
+            # 推單位
+            unit = ''
+            osc_type = None
+            if 'thickness' in rest:
+                unit = 'nm'
+            elif rest == 'e1_offset' or 'eps_inf' in rest:
+                unit = ''
+            elif 'egap' in rest.lower() or rest.endswith('Eg'):
+                unit = 'eV'
+            elif 'omega_p' in rest or rest.endswith('en'):
+                unit = 'eV'
+            elif rest.endswith('gamma') or rest.endswith('br'):
+                unit = 'eV'
+            elif rest.endswith('amp'):
+                # Drude amp 是 eV²，其他是無單位
+                m = re.match(r'oscillators\[(\d+)\]\.amp', human)
+                if m and li < len(result.layers):
+                    mat = result.layers[li].material
+                    if hasattr(mat, 'oscillators'):
+                        idx = int(m.group(1))
+                        if idx < len(mat.oscillators):
+                            osc_type = mat.oscillators[idx].type
+                            unit = 'eV²' if osc_type == 'drude' else ''
+
+            return (layer_name, human, unit, osc_type)
         except Exception:
-            return ('?', pname)
+            return ('?', pname, '', None)
 
     rows = []
     for pname, val in result.params.items():
         se = result.params_stderr.get(pname)
-        layer_name, human_param = parse_param_name(pname)
-        # 從 lmfit 取 bounds
+        layer_name, human_param, unit, _ = parse_param_name(pname)
         try:
             lmfit_p = result._lmfit_result.params[pname]
             lo, hi = lmfit_p.min, lmfit_p.max
@@ -1012,6 +1034,7 @@ else:
             'Layer': layer_name,
             'Parameter': human_param,
             'Value': f'{val:.5g}',
+            'Unit': unit if unit else '—',
             '± Uncertainty': f'{se:.3g}' if se else '—',
             'Rel %': f'{rel_unc:.2f}%' if rel_unc is not None else '—',
             'Bound Lo': f'{lo:.4g}' if np.isfinite(lo) else '−∞',
