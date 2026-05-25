@@ -15,6 +15,8 @@ import os
 import sys
 import io
 import json
+import time
+import threading
 import tempfile
 import base64
 from pathlib import Path
@@ -43,6 +45,22 @@ st.set_page_config(
     page_icon='🔬',
     layout='wide',
 )
+
+# Sticky 開始 fit 按鈕（CSS 讓 sidebar 內帶 .sticky-fit class 的元素貼底）
+st.markdown('''
+<style>
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]
+    div.element-container:has(.sticky-fit-marker) {
+    position: sticky;
+    bottom: 0;
+    background: var(--background-color);
+    padding-top: 8px;
+    padding-bottom: 8px;
+    z-index: 999;
+    border-top: 1px solid rgba(128,128,128,0.3);
+}
+</style>
+''', unsafe_allow_html=True)
 
 st.title('🔬 Ellipsometry Fit Tool')
 st.caption('擬合 ψ, Δ, T 量測資料到光學模型 — 對應 WVASE 工作流程')
@@ -83,10 +101,15 @@ if 'films' not in st.session_state:
 
 for key, default in [
     ('fit_result', None), ('data', None), ('T_data', None),
-    ('abort_fit', False), ('fit_running', False),
+    ('fit_thread', None), ('fit_abort_event', None),
+    ('fit_result_box', None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# 判斷目前是否擬合中
+fit_running = (st.session_state.fit_thread is not None
+               and st.session_state.fit_thread.is_alive())
 
 
 # =============================================================================
@@ -439,6 +462,10 @@ with st.sidebar:
                             hc1.caption('參數 (初始值)')
                             hc2.caption('min')
                             hc3.caption('max')
+                            # 各參數的合理步進
+                            param_steps = {
+                                'amp': 0.1, 'en': 0.05, 'br': 0.01, 'Eg': 0.05,
+                            }
                             for pname in needed:
                                 osc.setdefault(pname, 0.0)
                                 if pname not in osc.get('bounds', {}):
@@ -448,19 +475,23 @@ with st.sidebar:
                                 disp_name, unit, meaning = labels.get(pname,
                                     (pname.title(), '', ''))
                                 label_str = f'{disp_name} ({unit})' if unit else disp_name
+                                step_val = param_steps.get(pname, 0.1)
                                 pc1, pc2, pc3 = st.columns([2, 1, 1])
                                 with pc1:
                                     osc[pname] = st.number_input(
                                         label_str, value=float(osc[pname]),
+                                        step=step_val, format='%.4f',
                                         key=f'{kp}o{pname}_{i}', help=meaning,
                                     )
                                 with pc2:
                                     osc['bounds'][pname][0] = st.number_input(
                                         '下限', value=float(osc['bounds'][pname][0]),
+                                        step=step_val, format='%.4f',
                                         key=f'{kp}o{pname}lo_{i}', label_visibility='collapsed')
                                 with pc3:
                                     osc['bounds'][pname][1] = st.number_input(
                                         '上限', value=float(osc['bounds'][pname][1]),
+                                        step=step_val, format='%.4f',
                                         key=f'{kp}o{pname}hi_{i}', label_visibility='collapsed')
 
     # ----- 6. 擬合設定 -----
@@ -545,18 +576,20 @@ with st.sidebar:
                                       min_value=0.0001,
                                       key=f'_sT_{st.session_state.preset_name}')
 
-    st.markdown('---')
+    # ---- Sticky 開始/中斷按鈕（CSS 把這個 container 釘在左下）----
+    st.markdown('<div class="sticky-fit-marker"></div>', unsafe_allow_html=True)
     c_run, c_abort = st.columns([3, 1])
     with c_run:
         run_fit = st.button('🚀 開始擬合', type='primary', use_container_width=True,
-                            disabled=(st.session_state.data is None
-                                       or st.session_state.fit_running))
+                            disabled=(st.session_state.data is None or fit_running))
     with c_abort:
-        if st.button('⛔ 中斷', use_container_width=True,
-                     disabled=not st.session_state.fit_running):
-            st.session_state.abort_fit = True
+        if st.button('⛔ 中斷', use_container_width=True, disabled=not fit_running):
+            if st.session_state.fit_abort_event:
+                st.session_state.fit_abort_event.set()
     if st.session_state.data is None:
         st.caption('👆 請先上傳資料或點「用範例」')
+    if fit_running:
+        st.caption('⏳ 擬合中... 按「中斷」可停止')
 
     # ----- 7. Save / Load Session -----
     with st.expander('💾 儲存 / 載入 Session（YAML）'):
@@ -708,38 +741,68 @@ def build_config():
     }
 
 
-# ----- 跑擬合 -----
-if run_fit:
+# ----- 跑擬合（threading + 輪詢，讓 abort 真的能用）-----
+if run_fit and not fit_running:
     config = build_config()
-
     data = st.session_state.data.crop_wavelength(*wl_range)
     T_data = st.session_state.T_data
     if T_data is not None:
         T_data = T_data.crop_wavelength(*wl_range)
 
-    st.session_state.fit_running = True
-    st.session_state.abort_fit = False
-    with st.spinner('擬合中…（可按右側「⛔ 中斷」停止）'):
+    # 建立 abort event 與 result holder
+    abort_event = threading.Event()
+    result_box = {}
+
+    def _fit_worker():
         try:
             fitter = Fitter(config, data, T_data)
-            result = fitter.fit(
-                verbose=False,
-                abort_check=lambda: st.session_state.get('abort_fit', False),
-            )
-            st.session_state.fit_result = result
-            st.session_state.last_config = config
-            if st.session_state.abort_fit:
-                st.warning(f'⚠️ 使用者中斷。最後 MSE = {result.mse:.4e}')
-            else:
-                st.success(f'✓ 擬合完成，MSE = {result.mse:.4e}，{result.n_iter} evals')
+            r = fitter.fit(verbose=False, abort_check=abort_event.is_set)
+            # FitResult 內含 _lmfit_result 不易 pickle，留著但小心使用
+            result_box['result'] = r
+            result_box['aborted'] = abort_event.is_set()
         except Exception as e:
-            st.error(f'擬合失敗：{e}')
             import traceback
-            with st.expander('Traceback'):
-                st.code(traceback.format_exc())
-        finally:
-            st.session_state.fit_running = False
-            st.session_state.abort_fit = False
+            result_box['error'] = str(e)
+            result_box['traceback'] = traceback.format_exc()
+
+    t = threading.Thread(target=_fit_worker, daemon=True)
+    # 抑制 streamlit 對 thread 沒 ScriptRunContext 的警告
+    try:
+        from streamlit.runtime.scriptrunner import add_script_run_ctx
+        add_script_run_ctx(t)
+    except Exception:
+        pass
+    t.start()
+    st.session_state.fit_thread = t
+    st.session_state.fit_abort_event = abort_event
+    st.session_state.fit_result_box = result_box
+    st.session_state.last_config = config
+    st.rerun()
+
+# ----- 輪詢執行緒（fit 仍在跑時，0.5 秒重整一次讓 abort 按鈕能被處理）-----
+if fit_running:
+    time.sleep(0.5)
+    st.rerun()
+
+# ----- fit 完成（thread 不在跑了但有結果或錯誤）-----
+if (st.session_state.fit_thread is not None
+        and not st.session_state.fit_thread.is_alive()):
+    box = st.session_state.fit_result_box or {}
+    if 'result' in box:
+        st.session_state.fit_result = box['result']
+        if box.get('aborted'):
+            st.warning(f'⚠️ 使用者中斷。最後 MSE = {box["result"].mse:.4e}')
+        else:
+            st.success(f'✓ 擬合完成，MSE = {box["result"].mse:.4e}，'
+                       f'{box["result"].n_iter} evals')
+    elif 'error' in box:
+        st.error(f'擬合失敗：{box["error"]}')
+        with st.expander('Traceback'):
+            st.code(box.get('traceback', ''))
+    # 清理
+    st.session_state.fit_thread = None
+    st.session_state.fit_abort_event = None
+    st.session_state.fit_result_box = None
 
 
 # ----- 結果顯示 -----
