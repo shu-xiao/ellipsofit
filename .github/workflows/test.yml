@@ -1,0 +1,68 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify imports
+        run: |
+          python -c "from ellipsometry.core.io import read_reflection"
+          python -c "from ellipsometry.core.dispersion import MaterialLibrary; print('Materials:', MaterialLibrary.list_available())"
+          python -c "from ellipsometry.core.tmm_calc import calculate, Layer"
+          python -c "from ellipsometry.core.fitter import Fitter"
+
+      - name: Run module self-tests
+        run: |
+          python -m ellipsometry.core.dispersion
+          python -m ellipsometry.core.tmm_calc
+
+      - name: Generate fake data (if missing)
+        run: |
+          python tests/make_fake_data.py
+
+      - name: Run end-to-end fit tests
+        run: |
+          python tests/test_fit_e2e.py
+
+      - name: Run fast advanced tests (sin_cos, wrap, huber)
+        run: |
+          # Skip two-stage DE test (takes >5 min); run only fast checks
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from tests.test_fit_advanced import run_one, make_config
+          # A1: sin_cos delta residual
+          _, err = run_one('CI: sin_cos', make_config(200, delta_mode='sin_cos'), 285)
+          assert err < 1.0, f'sin_cos fail: {err} nm'
+          # A2: wrap delta residual (WVASE-style)
+          _, err = run_one('CI: wrap', make_config(200, delta_mode='wrap'), 285)
+          assert err < 1.0, f'wrap fail: {err} nm'
+          # C1: robust huber loss
+          _, err = run_one('CI: huber', make_config(200, loss='huber'), 285)
+          assert err < 1.0, f'huber fail: {err} nm'
+          print('All advanced fast tests passed')
+          "

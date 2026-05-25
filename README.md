@@ -1,4 +1,6 @@
-# Ellipsometry Fit Tool
+# ellipsofit
+
+[![Tests](https://github.com/shu-xiao/ellipsofit/actions/workflows/test.yml/badge.svg)](https://github.com/shu-xiao/ellipsofit/actions/workflows/test.yml)
 
 擬合 ellipsometry 量測資料 (Ψ, Δ, T) 到光學模型，對應 WVASE 工作流程。
 
