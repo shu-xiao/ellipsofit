@@ -15,10 +15,23 @@
 ### Windows（用 Windows 原生 Python）
 雙擊 `run_gui.bat`，瀏覽器開 http://localhost:8501
 
-### WSL2 / Linux / macOS（終端機）
+### macOS
+首次需要給執行權限：
 ```bash
-bash run_gui.sh
+chmod +x run_gui.command run_gui.sh stop_gui.sh
 ```
+之後 Finder **雙擊 `run_gui.command`**（會開 Terminal）— 自動啟動 + 開瀏覽器。
+結束：執行 `bash stop_gui.sh` 或關掉 Terminal 視窗。
+
+### Linux / WSL2（終端機）
+```bash
+bash run_gui.sh           # 前景模式，Ctrl-C 結束
+bash run_gui.sh -d        # daemon 背景模式 + 自動開瀏覽器
+bash run_gui.sh -p 8888   # 指定 port
+bash stop_gui.sh          # 停止 daemon
+```
+
+Linux 桌面環境另可把 `ellipsofit.desktop` 拖到 `~/.local/share/applications/` 變成應用程式選單項目。
 
 ## 功能
 

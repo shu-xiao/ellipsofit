@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ellipsofit
+Comment=Ellipsometry data fitting tool
+Exec=bash -c 'cd %k/.. && bash run_gui.sh -d'
+Path=%k/..
+Terminal=true
+Icon=utilities-terminal
+Categories=Science;Physics;
