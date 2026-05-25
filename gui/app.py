@@ -824,7 +824,16 @@ else:
     from ellipsometry.core.tmm_calc import pseudo_epsilon
     from ellipsometry.core.units import nm_to_eV
 
-    st.subheader('📊 光學常數')
+    # ---- X 軸單位切換 ----
+    col_title, col_unit = st.columns([3, 1])
+    with col_title:
+        st.subheader('📊 光學常數')
+    with col_unit:
+        x_unit = st.radio(
+            'X 軸單位', options=['nm', 'eV'],
+            index=0, horizontal=True,
+            label_visibility='collapsed', key='_x_unit',
+        )
 
     # 薄膜（第二層）
     film_layer = result.layers[1]
@@ -833,28 +842,32 @@ else:
     eps_f = film_layer.material.epsilon(wl_arr)
     E_arr = nm_to_eV(wl_arr)
 
+    if x_unit == 'nm':
+        X_arr, x_label = wl_arr, 'Wavelength (nm)'
+    else:
+        X_arr, x_label = E_arr, 'Energy (eV)'
+
     tab_nk, tab_eps_film, tab_pseudo = st.tabs([
         '薄膜 n, k', '薄膜 ε₁, ε₂', '量測 <ε> (pseudo)',
     ])
 
     with tab_nk:
         fig_nk = make_subplots(rows=1, cols=2, subplot_titles=('n', 'k'))
-        fig_nk.add_trace(go.Scatter(x=wl_arr, y=n_f, name='n',
+        fig_nk.add_trace(go.Scatter(x=X_arr, y=n_f, name='n',
                                      line=dict(width=2)), row=1, col=1)
-        fig_nk.add_trace(go.Scatter(x=wl_arr, y=k_f, name='k',
+        fig_nk.add_trace(go.Scatter(x=X_arr, y=k_f, name='k',
                                      line=dict(width=2, color='#d62728')), row=1, col=2)
-        fig_nk.update_xaxes(title_text='Wavelength (nm)')
+        fig_nk.update_xaxes(title_text=x_label)
         fig_nk.update_layout(height=380, hovermode='x unified')
         st.plotly_chart(fig_nk, use_container_width=True)
 
     with tab_eps_film:
-        # ε vs E (eV)
         fig_eps = make_subplots(rows=1, cols=2, subplot_titles=('ε₁', 'ε₂'))
-        fig_eps.add_trace(go.Scatter(x=E_arr, y=eps_f.real, name='ε₁',
+        fig_eps.add_trace(go.Scatter(x=X_arr, y=eps_f.real, name='ε₁',
                                       line=dict(width=2)), row=1, col=1)
-        fig_eps.add_trace(go.Scatter(x=E_arr, y=eps_f.imag, name='ε₂',
+        fig_eps.add_trace(go.Scatter(x=X_arr, y=eps_f.imag, name='ε₂',
                                       line=dict(width=2, color='#d62728')), row=1, col=2)
-        fig_eps.update_xaxes(title_text='Energy (eV)')
+        fig_eps.update_xaxes(title_text=x_label)
         fig_eps.update_layout(height=380, hovermode='x unified',
                               title='薄膜真實介電函數（從擬合模型）')
         st.plotly_chart(fig_eps, use_container_width=True)
@@ -869,13 +882,13 @@ else:
             eps_p = pseudo_epsilon(result.psi_meas[:, j], result.delta_meas[:, j],
                                    ang, convention='tmm')
             c = colors[j % len(colors)]
-            fig_pe.add_trace(go.Scatter(x=E_arr, y=eps_p.real,
+            fig_pe.add_trace(go.Scatter(x=X_arr, y=eps_p.real,
                                          name=f'AOI={ang}°', line=dict(color=c)),
                               row=1, col=1)
-            fig_pe.add_trace(go.Scatter(x=E_arr, y=eps_p.imag,
+            fig_pe.add_trace(go.Scatter(x=X_arr, y=eps_p.imag,
                                          name=f'AOI={ang}°', line=dict(color=c),
                                          showlegend=False), row=1, col=2)
-        fig_pe.update_xaxes(title_text='Energy (eV)')
+        fig_pe.update_xaxes(title_text=x_label)
         fig_pe.update_layout(height=380, hovermode='x unified')
         st.plotly_chart(fig_pe, use_container_width=True)
 
