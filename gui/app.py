@@ -892,17 +892,134 @@ else:
         fig_pe.update_layout(height=380, hovermode='x unified')
         st.plotly_chart(fig_pe, use_container_width=True)
 
+    # ---- 擬合公式（依層顯示模型公式）----
+    from ellipsometry.core.dispersion import (
+        Pointwise, Constant, Cauchy, Sellmeier, Lorentz, Drude,
+        DrudeLorentz, TaucLorentz, Gaussian, GenOsc, PolynomialNK,
+    )
+
+    def describe_layer(idx: int, layer):
+        """產生單層的公式 + 參數描述（markdown）"""
+        mat = layer.material
+        lines = [f'**Layer {idx}: `{layer.name}`** — thickness = '
+                 f'{layer.thickness_nm:.4g} nm '
+                 f'({"coherent" if layer.coherent else "incoherent"})']
+
+        if isinstance(mat, Pointwise):
+            lines.append(f'- **Pointwise**: 從表插值（{mat.name}, method={mat.method}）')
+        elif isinstance(mat, Constant):
+            lines.append(f'- **Constant**: n + ik = {mat.n} + {mat.k}i')
+        elif isinstance(mat, Cauchy):
+            lines.append(f'- **Cauchy**: $n(\\lambda) = A + B/\\lambda^2 + C/\\lambda^4$')
+            lines.append(f'  - A={mat.A}, B={mat.B}, C={mat.C}  (λ in μm)')
+        elif isinstance(mat, Sellmeier):
+            lines.append(f'- **Sellmeier**: $n^2-1 = \\sum_i B_i\\lambda^2/(\\lambda^2-C_i^2)$')
+            lines.append(f'  - coefficients = {mat.coefficients}')
+        elif isinstance(mat, Drude):
+            lines.append(f'- **Drude**: $\\varepsilon = \\varepsilon_\\infty - \\omega_p^2/(E^2+i\\Gamma E)$')
+            lines.append(f'  - ε∞={mat.eps_inf}, ωp={mat.omega_p} eV, Γ={mat.gamma} eV')
+        elif isinstance(mat, DrudeLorentz):
+            lines.append(f'- **Drude-Lorentz**: $\\varepsilon = \\varepsilon_\\infty + \\text{{Drude}} + \\sum_k \\text{{Lorentz}}_k$')
+            lines.append(f'  - ε∞ = {mat.eps_inf}')
+            if mat.drude:
+                lines.append(f'  - Drude: ωp={mat.drude["omega_p"]} eV, Γ={mat.drude["gamma"]} eV')
+            for i, osc in enumerate(mat.lorentz):
+                lines.append(f'  - Lorentz #{i+1}: A={osc.get("A")}, '
+                             f'E0={osc.get("E0")} eV, γ={osc.get("gamma")} eV')
+        elif isinstance(mat, GenOsc):
+            lines.append(f'- **GenOsc** (WVASE-style):')
+            lines.append(f'  $\\varepsilon(E) = \\varepsilon_\\infty^{{offset}} + \\text{{poles}} + \\sum_i \\text{{osc}}_i(E)$')
+            lines.append(f'  - ε∞ offset = {mat.e1_offset}')
+            if mat.Egap:
+                lines.append(f'  - Egap = {mat.Egap} eV')
+            if mat.uv_pole:
+                lines.append(f'  - UV pole: pos={mat.uv_pole.position} eV, mag={mat.uv_pole.magnitude}')
+            if mat.ir_pole:
+                lines.append(f'  - IR pole: pos={mat.ir_pole.position} eV, mag={mat.ir_pole.magnitude}')
+            for i, osc in enumerate(mat.oscillators):
+                if not osc.active:
+                    continue
+                if osc.type == 'drude':
+                    lines.append(f'  - Osc #{i+1} **Drude**: $-\\text{{Amp}}/(E^2+i\\text{{Br}}E)$, '
+                                 f'Amp={osc.amp:.4g}, Br={osc.br:.4g}')
+                elif osc.type == 'lorentz':
+                    lines.append(f'  - Osc #{i+1} **Lorentz**: $A\\cdot E_n^2/(E_n^2-E^2-iBrE)$, '
+                                 f'A={osc.amp:.4g}, En={osc.en:.4g}, Br={osc.br:.4g}')
+                elif osc.type == 'gaussian':
+                    lines.append(f'  - Osc #{i+1} **Gaussian**: $A\\cdot\\exp(-((E-E_n)/\\sigma)^2)$ + KK, '
+                                 f'A={osc.amp:.4g}, En={osc.en:.4g}, Br={osc.br:.4g}')
+                elif osc.type == 'tauc_lorentz':
+                    lines.append(f'  - Osc #{i+1} **Tauc-Lorentz**: '
+                                 f'A={osc.amp:.4g}, En={osc.en:.4g}, Br={osc.br:.4g}, Eg={osc.Eg:.4g}')
+                else:
+                    lines.append(f'  - Osc #{i+1} {osc.type}: amp={osc.amp:.4g}, en={osc.en:.4g}, br={osc.br:.4g}')
+        elif isinstance(mat, PolynomialNK):
+            lines.append(f'- **PolynomialNK** (degree {len(mat.n_coeffs)-1}):')
+            lines.append(f'  $n(E) = \\sum a_i E^i$, $k(E) = \\sum b_i E^i$')
+            lines.append(f'  - n_coeffs = {[round(c, 4) for c in mat.n_coeffs]}')
+            lines.append(f'  - k_coeffs = {[round(c, 4) for c in mat.k_coeffs]}')
+        return '\n'.join(lines)
+
+    with st.expander('📐 擬合公式（每層使用的色散模型）', expanded=False):
+        for i, ly in enumerate(result.layers):
+            st.markdown(describe_layer(i, ly))
+            st.markdown('---')
+
     # ---- 參數表 ----
     st.subheader('📋 最佳化參數')
+
+    def parse_param_name(pname: str) -> tuple:
+        """L1__thickness → (Layer 1, thickness)
+           L1__oscillators_0__amp → (Layer 1, oscillators[0].amp)
+        """
+        if not pname.startswith('L'):
+            return ('?', pname)
+        try:
+            li_str, rest = pname[1:].split('__', 1)
+            li = int(li_str)
+            # 把 oscillators_0__amp 還原成 oscillators[0].amp
+            human = rest.replace('__', '.')
+            # _0 →[0] 等（簡單啟發式）
+            import re
+            human = re.sub(r'_(\d+)', r'[\1]', human)
+            layer_name = result.layers[li].name if li < len(result.layers) else f'L{li}'
+            return (layer_name, human)
+        except Exception:
+            return ('?', pname)
+
     rows = []
-    for name, val in result.params.items():
-        se = result.params_stderr.get(name)
+    for pname, val in result.params.items():
+        se = result.params_stderr.get(pname)
+        layer_name, human_param = parse_param_name(pname)
+        # 從 lmfit 取 bounds
+        try:
+            lmfit_p = result._lmfit_result.params[pname]
+            lo, hi = lmfit_p.min, lmfit_p.max
+            vary = lmfit_p.vary
+        except Exception:
+            lo = hi = float('nan'); vary = True
+
+        rel_unc = (se / abs(val) * 100) if (se and val) else None
+
         rows.append({
-            'Parameter': name,
+            'Layer': layer_name,
+            'Parameter': human_param,
             'Value': f'{val:.5g}',
-            'Stderr': f'{se:.3g}' if se else '—',
+            '± Uncertainty': f'{se:.3g}' if se else '—',
+            'Rel %': f'{rel_unc:.2f}%' if rel_unc is not None else '—',
+            'Bound Lo': f'{lo:.4g}' if np.isfinite(lo) else '−∞',
+            'Bound Hi': f'{hi:.4g}' if np.isfinite(hi) else '+∞',
+            'Fit?': '✓' if vary else 'fixed',
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    df_params = pd.DataFrame(rows)
+    st.dataframe(df_params, use_container_width=True, hide_index=True)
+
+    # 提供下載
+    st.download_button(
+        '📥 下載參數表 (csv)',
+        data=df_params.to_csv(index=False),
+        file_name='fit_parameters.csv', mime='text/csv',
+    )
 
     # ---- 下載結果 ----
     st.subheader('💾 下載')
