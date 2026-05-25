@@ -489,6 +489,34 @@ class Fitter:
         dof = max(n_obs - nvarys, 1)
         return float(np.sqrt(ss / dof))
 
+    def _auto_finite_bounds(self, params: 'lmfit.Parameters',
+                            verbose: bool = True) -> 'lmfit.Parameters':
+        """確保所有 vary=True 參數都有 finite bounds（DE 必需）
+
+        沒設的用 ±50% 邊界（最小 ±1.0），印警告列出哪些被自動填。
+        """
+        auto_filled = []
+        for name, p in params.items():
+            if not p.vary:
+                continue
+            lo, hi = p.min, p.max
+            if not (np.isfinite(lo) and np.isfinite(hi)):
+                v = abs(p.value)
+                pad = max(v * 0.5, 1.0)
+                new_lo = p.value - pad if not np.isfinite(lo) else lo
+                new_hi = p.value + pad if not np.isfinite(hi) else hi
+                # 厚度等不能負的常識保護
+                if 'thickness' in name and new_lo < 0:
+                    new_lo = max(p.value * 0.1, 0.01)
+                p.min = new_lo
+                p.max = new_hi
+                auto_filled.append((name, new_lo, new_hi))
+        if auto_filled and verbose:
+            print('  ⚠️  以下參數自動補 bounds (DE 需要 finite)：')
+            for n, lo, hi in auto_filled:
+                print(f'      {n}: [{lo:.4g}, {hi:.4g}]')
+        return params
+
     def _max_nfev(self, nvarys: int) -> int:
         """把 WVASE-style「LM 迭代次數」換算成 lmfit 的 max_nfev (函式評估數)
 
@@ -532,6 +560,12 @@ class Fitter:
 
         # 兩段式：先 DE 全域搜索找 basin，再用 LM 精調
         params_init = self.params
+
+        # DE 需要所有變數參數有有限 bound — 沒設的自動補（±50% of |value|，
+        # 至少 ±1.0）。給友善錯誤訊息列出哪些缺。
+        if self.two_stage or self.method == 'differential_evolution':
+            params_init = self._auto_finite_bounds(params_init, verbose=verbose)
+
         if self.two_stage:
             if verbose:
                 print(f'  Stage 1: differential_evolution 全域搜索...')

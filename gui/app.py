@@ -349,11 +349,21 @@ with st.sidebar:
                     st.markdown('##### 🌀 GenOsc 振盪器')
                     go_cfg = film['gen_osc']
 
-                    cc1, cc2 = st.columns(2)
+                    cc1, cc2, cc3, cc4 = st.columns([2, 1, 1, 2])
                     with cc1:
                         go_cfg['e1_offset'] = st.number_input(
                             'ε∞ (e1 offset)', value=go_cfg['e1_offset'], key=kp+'e1o')
+                    # e1_offset bounds（DE 必需）
+                    go_cfg.setdefault('e1_offset_bounds', [0.5, 10.0])
                     with cc2:
+                        go_cfg['e1_offset_bounds'][0] = st.number_input(
+                            'ε∞ 下限', value=float(go_cfg['e1_offset_bounds'][0]),
+                            key=kp+'e1olo')
+                    with cc3:
+                        go_cfg['e1_offset_bounds'][1] = st.number_input(
+                            'ε∞ 上限', value=float(go_cfg['e1_offset_bounds'][1]),
+                            key=kp+'e1ohi')
+                    with cc4:
                         go_cfg['egap'] = st.number_input(
                             'Egap (eV)', value=go_cfg['egap'], key=kp+'egap')
 
@@ -600,7 +610,7 @@ def build_config():
             go_cfg = film['gen_osc']
             # 依振盪器類型只收集需要的參數做 fit
             fit_paths = ['e1_offset']
-            bounds = {}
+            bounds = {'e1_offset': list(go_cfg.get('e1_offset_bounds', [0.5, 10.0]))}
             for i, osc in enumerate(go_cfg['oscillators']):
                 needed_params = OSC_PARAMS[osc['type']]
                 if osc.get('fit', True):
