@@ -892,10 +892,17 @@ else:
         st.download_button('📄 下載 config.yaml', data=cfg_yaml,
                            file_name='fit_config.yaml', mime='text/yaml')
 
-    # 2. nk 表
+    # 2. nk 表（用前面已算好的 n_f, k_f, eps_f, E_arr）
     with col_b:
-        nk_df = pd.DataFrame({'wavelength_nm': result.wavelength, 'n': n, 'k': k})
-        st.download_button('📊 下載 n,k 表 (csv)',
+        nk_df = pd.DataFrame({
+            'wavelength_nm': result.wavelength,
+            'energy_eV': E_arr,
+            'n': n_f,
+            'k': k_f,
+            'eps1': eps_f.real,
+            'eps2': eps_f.imag,
+        })
+        st.download_button('📊 下載 n,k,ε 表 (csv)',
                            data=nk_df.to_csv(index=False),
                            file_name=f'{film_layer.name}_nk.csv', mime='text/csv')
 
