@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtualenv
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 結果輸出（不進版本控制）
+results/
+*.log
+/tmp/
+
+# Streamlit
+.streamlit/
+
+# 個人 config（保留 example）
+config.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups / archives
+*.zip
+
+# Claude Code workspace
+.claude/
+
+# 但保留 example 與測試資料
+!config.example.yaml
+!data/

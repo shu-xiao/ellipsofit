@@ -1,0 +1,228 @@
+# =============================================================================
+# Ellipsometry 擬合設定檔（範例）
+#
+# 使用方式：
+#   1. 複製這個檔案為 config.yaml
+#   2. 修改下方參數（資料路徑、膜層、初始值）
+#   3. 執行：python run_fit.py --config config.yaml
+#
+# 單位約定：
+#   - 波長：nm
+#   - 振盪器能量 (E0, gamma)：eV
+#   - 厚度：nm
+#   - 角度：度 (degree)
+# =============================================================================
+
+
+# =============================================================================
+# 【0】內建材料插值法（全域預設，可被個別 layer 覆寫）
+# =============================================================================
+# linear — np.interp，最快，但稀疏資料有折角
+# cubic  — Cubic Spline，平滑但可能過衝
+# pchip  — Piecewise Cubic Hermite（推薦），形狀保留無過衝
+material_interpolation: pchip
+
+
+# =============================================================================
+# 【1】單位設定（一鍵切換，內部統一轉換）
+# =============================================================================
+units:
+  wavelength: nm        # nm / um / angstrom
+  oscillator: eV        # eV / nm（Drude-Lorentz 內部參數單位）
+
+
+# =============================================================================
+# 【2】實驗資料
+# =============================================================================
+data:
+  # 反射 ellipsometry 資料（多角度 Psi, Delta）
+  reflection:
+    file: data/sample_R.dat
+    format: wvase                  # wvase / csv / generic_txt
+    angles: [65, 70, 75]           # 度
+
+  # 穿透資料（normal incidence T）
+  transmission:
+    file: data/sample_T.dat
+    format: wvase
+    angle: 0
+
+  # 波長截取範圍（不寫=用檔案全部）
+  wavelength_range: [300, 2000]    # nm
+
+
+# =============================================================================
+# 【3】膜層堆疊（從入射側到基板，由上而下）
+# =============================================================================
+layers:
+  # ---------- 環境（光從這側入射，一般是空氣）----------
+  - name: ambient
+    material: air                  # 內建材料：air/Si/SiO2/MgO/Al2O3/TiO2/Au/Au_JC/Au_Palik/Al
+    thickness: infinite            # 環境永遠 infinite
+
+  # ---------- 薄膜：Drude-Lorentz（2 個 Lorentz 振盪器）----------
+  - name: metal_film
+    material:
+      model: drude_lorentz         # 色散模型，見 dispersion.py 完整清單
+      params:
+        eps_inf: 1.0               # 高頻介電常數 ε∞
+        drude:
+          omega_p: 8.5             # plasma frequency (eV)
+          gamma:   0.05            # Drude damping (eV)
+        lorentz:                   # 想加幾個振盪器就加幾個，預設 2 個
+          - { A: 2.5, E0: 2.7, gamma: 0.3 }   # Lorentz #1
+          - { A: 1.8, E0: 4.5, gamma: 0.5 }   # Lorentz #2
+      # 要擬合的參數（其他保持初始值固定）
+      fit:
+        - eps_inf
+        - drude.omega_p
+        - drude.gamma
+        - lorentz[*].A             # [*] = 對所有振盪器
+        - lorentz[*].E0
+        - lorentz[*].gamma
+      # 參數上下界（沒寫=無限制）
+      bounds:
+        eps_inf:          [0.5, 10]
+        drude.omega_p:    [5, 12]
+        drude.gamma:      [0.01, 0.5]
+        lorentz[*].A:     [0, 10]
+        lorentz[*].E0:    [0.5, 6.5]
+        lorentz[*].gamma: [0.01, 2.0]
+    thickness: 50                  # nm，初始值
+    coherent: true                 # 薄膜永遠 true（相干干涉）
+    fit_thickness: true            # 厚度是否擬合
+    thickness_bounds: [10, 200]    # nm
+
+  # ---------- 基板（依實驗樣品選一種，把不用的註解掉）----------
+  #
+  # 厚度與相干性說明：
+  #   - 預設 1 mm = 1000000 nm（典型 wafer 厚度）
+  #   - coherent: false → 背面非相干反射（透明基板必需，避免 fringes 污染）
+  #   - SiO2 為例外，常見既當厚膜又當薄熱氧化層，必須手動指定厚度
+
+  # (a) Si wafer（最常用）
+  - name: substrate
+    material: Si
+    thickness: 1000000             # 1 mm（如要更精確改成實際 wafer 厚度）
+    coherent: false                # 背面非相干（IR 區會穿透）
+    fit_thickness: false
+
+  # (b) MgO 單晶
+  # - name: substrate
+  #   material: MgO
+  #   thickness: 1000000           # 1 mm
+  #   coherent: false              # 透明基板必須
+  #   fit_thickness: false
+
+  # (c) Sapphire（單晶 Al2O3）
+  # - name: substrate
+  #   material: Al2O3
+  #   thickness: 1000000           # 1 mm
+  #   coherent: false              # 透明基板必須
+  #   fit_thickness: false
+
+  # (d) SiO2/Si 熱氧化片（兩層！熱氧化層厚度依製程而定）
+  # - name: SiO2_thermal
+  #   material: SiO2
+  #   thickness: 285               # ⚠️ 一定要改成實際熱氧化厚度（100/200/285/300/500...）
+  #   coherent: true               # 薄層 → 相干干涉
+  #   fit_thickness: false         # 通常已知不擬合；若不確定可開 true
+  # - name: substrate
+  #   material: Si
+  #   thickness: 1000000
+  #   coherent: false
+  #   fit_thickness: false
+
+  # (e) SiO2 bulk（fused silica / quartz wafer）
+  # - name: substrate
+  #   material: SiO2
+  #   thickness: 1000000           # ⚠️ 改成實際 wafer 厚度（500 / 1000 / 2000 μm）
+  #   coherent: false
+  #   fit_thickness: false
+
+
+# =============================================================================
+# 【4】擬合設定
+# =============================================================================
+fit:
+  method: leastsq                  # leastsq / least_squares / differential_evolution
+  max_iter: 2000
+
+  # ---- WVASE 風格 weighting ----
+  weighting:
+    scheme: custom                 # standard（從.dat檔的Err欄）/ equal / custom
+    sigma_psi:   0.5               # deg，越小權重越大
+    sigma_delta: 1.0               # deg
+    sigma_T:     0.01              # 穿透率 (0-1)
+
+    # 個別角度加權（不寫=都 1.0）
+    angle_weights:
+      65: 1.0
+      70: 1.0
+      75: 1.0
+
+    # 波長範圍加權（可選，list 想加幾段加幾段）
+    wavelength_weights: []
+    # 範例：
+    # wavelength_weights:
+    #   - { range: [300, 800],  weight: 1.5 }
+    #   - { range: [800, 2000], weight: 1.0 }
+
+  unwrap_delta: true               # 處理 Delta ±180° 跳變
+
+
+# =============================================================================
+# 【5】輸出
+# =============================================================================
+output:
+  dir: results/
+  prefix: sample01                 # 輸出檔名前綴
+  format: all                      # all / html / txt
+
+  # 要產生哪些圖
+  plots:
+    psi_delta_fit:    true         # Ψ, Δ 擬合曲線 vs 實驗
+    transmission_fit: true         # T 擬合曲線
+    nk_dispersion:    true         # n, k vs wavelength
+    eps_dispersion:   true         # ε1, ε2 vs energy
+    residuals:        true         # 殘差圖
+
+  # plotly HTML 設定
+  embed_plotly_js: true            # true=嵌入(離線可看，檔大) / false=用CDN
+
+
+# =============================================================================
+# 【附錄】其他材料指定方式範例（非預設用法）
+# =============================================================================
+# 1) 內建材料 + 指定插值法（覆寫全域）：
+#    material:
+#      model: pointwise
+#      source: Au_JC
+#      params:
+#        method: cubic              # linear / cubic / pchip
+#
+# 2) 自訂 nk 表（給程式直接傳入，非從庫讀）：
+#    material:
+#      model: pointwise
+#      params:
+#        wavelength_nm: [300, 400, 500, ...]
+#        n: [1.5, 1.48, 1.46, ...]
+#        k: [0, 0, 0, ...]
+#        method: pchip
+#
+# 3) PolynomialNK — 從現有材料自動擬合多項式：
+#    material:
+#      model: polynomial_nk
+#      params:
+#        fit_from: Au_JC            # 從這個內建材料擬合
+#        target_mse: 0.02           # WVASE 風格：自動加 degree 到達標
+#        max_degree: 12             # 上限
+#
+# 4) PolynomialNK — 直接給係數（可參與 fit）：
+#    material:
+#      model: polynomial_nk
+#      params:
+#        n_coeffs: [0.3, 0.05, -0.001]    # n(E) = 0.3 + 0.05·E - 0.001·E²
+#        k_coeffs: [5.0, 1.2, 0.0]        # k(E) = 5.0 + 1.2·E
+#        domain_eV: [0.5, 4.5]
+#      fit: [n_coeffs[1], k_coeffs[0], k_coeffs[1]]
