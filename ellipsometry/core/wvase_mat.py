@@ -3,20 +3,20 @@ WVASE .mat 檔解析器
 
 支援兩種 WVASE 材料檔格式：
 
-    1. 表格式 (tabulated)
+    1. 表格式 (tabulated)               ✅ 完整支援
         comment
         eV  或 nm
         NK  或 e1e2
         <x>  <col2>  <col3>
         ...
 
-    2. GenOsc 模型
+    2. GenOsc 模型                       ⚠️ 部分支援
         comment
         GENOSC
         <flags 14 個數> ─→ flags[0] = 振盪器數量 N
         <UV_pos UV_mag IR_pos IR_mag e1_offset Egap>
         <fit_range_min fit_range_max fit_range_step>  (eV，僅供顯示)
-        <oscillator 1>  format: 1 TYPE 0 P1 P2 P3 P4 P5 P6 P7
+        <oscillator 1>  format: 1 TYPE STYLE P1 P2 P3 P4 P5 P6 P7
         <oscillator 2>
         ...
 
@@ -26,15 +26,29 @@ GenOsc 公式（WVASE 對應）：
          + IR_mag / (IR_pos² − E²)         (IR pole)
          + Σᵢ ε_osc_i(E)
 
-WVASE 振盪器類型代號（已驗證）：
-    2  = Lorentz       (Amp, En, Br)
-    7  = Tauc-Lorentz  (Amp, En, Br, Eg)
+WVASE 振盪器類型代號（部分逆向）：
+    來源：ivergara/Genosc-Parser GitHub + 自行對照
+    0  = Lorentz       (Amp, En, Br)              ✅
+    2  = Gaussian      (Amp, En, Br)              ⚠️ amp 慣例可能不同
+    6  = Drude         (Amp, Br)                  ✅
+    7  = Tauc-Lorentz  (Amp, En, Br, Eg)          ⚠️ 推測，amp 可能不同
     其他 → 警告並用 Lorentz 近似
+
+⚠️ 已知限制：
+   - 複雜多振盪器 GenOsc 模型（如 MgO_g.mat 含 9 個 Gauss/TL）
+     會給錯誤結果，因為 WVASE 的 Gaussian/TL amp 慣例（integrated area？）
+     與我們不同
+   - 解法：對應材料用 refractiveindex.info 抓 tabulated 版本，
+     或用 WVASE 自己跑一次後匯出成 NK 表格式
+
+✅ 已驗證 OK：
+   - Tabulated NK / e1e2 (Silicon.mat, SiO2_jaw.mat)
+   - 純 pole 模型 (Sapphire_e/o_sell.mat) — 0.4% 內
 
 Usage:
     from ellipsometry.core.wvase_mat import read_wvase_mat
     sapph = read_wvase_mat('data/substrate/Sapphire_e_sell.mat')
-    n, k = sapph.n_k(np.array([500.0]))   # 1.766, 0
+    n, k = sapph.n_k(np.array([500.0]))   # 1.773 (vs WVASE 1.766, 0.4%)
 """
 from __future__ import annotations
 
@@ -50,13 +64,15 @@ from .dispersion import (
 from .units import nm_to_eV, eV_to_nm
 
 
-# WVASE 振盪器類型對照（已驗證部分）
+# WVASE 振盪器類型對照
+# 來源：ivergara/Genosc-Parser GitHub + 反推 NbN/MgO/SiO 案例
 _WVASE_OSC_TYPES = {
-    2:  'lorentz',
-    7:  'tauc_lorentz',
-    # 26 = Cody-Lorentz / PSemi-M0 (5+ params), 暫用 lorentz 近似
-    # 0  = Sellmeier-like? 不確定
-    # 5  = ?
+    0:  'lorentz',         # 確認 (GitHub parser + 對照 SiO_Palik_g)
+    2:  'gaussian',        # 確認 (GitHub parser)
+    6:  'drude',           # 確認 (GitHub parser, 2 params)
+    7:  'tauc_lorentz',    # 推測 (4 params with Eg)
+    # 26 = Cody-Lorentz / PSemi-M0 (5+ params), 暫用 tauc_lorentz 近似
+    # 5  = ? (在 col[2] 而非 col[1]，可能是 style 不是 type)
 }
 
 
