@@ -433,13 +433,16 @@ with st.sidebar:
                                                   'en': [0.5, 6.5],
                                                   'br': [0.05, 2.0]})
                         with st.container(border=True):
+                            OSC_TYPE_OPTS = ['lorentz', 'gaussian', 'drude', 'drude_rt',
+                                             'tauc_lorentz', 'harmonic']
                             cc1, cc2, cc3 = st.columns([2, 1, 1])
                             with cc1:
+                                # 若舊 osc type 不在新清單，預設第一個
+                                cur_idx = (OSC_TYPE_OPTS.index(osc['type'])
+                                            if osc['type'] in OSC_TYPE_OPTS else 0)
                                 osc['type'] = st.selectbox(
-                                    f'Osc #{i+1} 類型',
-                                    options=['lorentz', 'gaussian', 'drude', 'tauc_lorentz', 'harmonic'],
-                                    index=['lorentz', 'gaussian', 'drude', 'tauc_lorentz', 'harmonic'].index(osc['type']),
-                                    key=f'{kp}otype_{i}',
+                                    f'Osc #{i+1} 類型', options=OSC_TYPE_OPTS,
+                                    index=cur_idx, key=f'{kp}otype_{i}',
                                 )
                             with cc2:
                                 osc['active'] = st.checkbox('啟用', value=osc['active'],
@@ -457,15 +460,23 @@ with st.sidebar:
                                 'br':  [0.01, 5.0] if osc['type'] == 'drude' else [0.05, 2.0],
                                 'Eg':  [0.0, 5.0],
                             }
-                            # 表頭
-                            hc1, hc2, hc3 = st.columns([2, 1, 1])
-                            hc1.caption('參數 (初始值)')
-                            hc2.caption('min')
-                            hc3.caption('max')
-                            # 各參數的合理步進
+                            # 各參數的合理步進（不同類型不同）
                             param_steps = {
                                 'amp': 0.1, 'en': 0.05, 'br': 0.01, 'Eg': 0.05,
+                                'rho': 1e-6, 'tau': 1.0,
                             }
+                            # 表頭
+                            hc1, hc2, hc3 = st.columns(3)
+                            hc1.caption('Value')
+                            hc2.caption('min')
+                            hc3.caption('max')
+
+                            # drude_rt 預設 bounds
+                            default_bounds.update({
+                                'rho': [1e-8, 1e-3],
+                                'tau': [1.0, 200.0],
+                            })
+
                             for pname in needed:
                                 osc.setdefault(pname, 0.0)
                                 if pname not in osc.get('bounds', {}):
@@ -476,23 +487,29 @@ with st.sidebar:
                                     (pname.title(), '', ''))
                                 label_str = f'{disp_name} ({unit})' if unit else disp_name
                                 step_val = param_steps.get(pname, 0.1)
-                                pc1, pc2, pc3 = st.columns([2, 1, 1])
+                                # 1) 參數名稱 + 說明（整列 caption）
+                                st.caption(f'**{label_str}** — {meaning}')
+                                # 2) 三等寬欄：value | min | max（皆 collapsed label）
+                                pc1, pc2, pc3 = st.columns(3)
                                 with pc1:
                                     osc[pname] = st.number_input(
-                                        label_str, value=float(osc[pname]),
-                                        step=step_val, format='%.4f',
-                                        key=f'{kp}o{pname}_{i}', help=meaning,
+                                        f'{pname}_val', value=float(osc[pname]),
+                                        step=step_val, format='%.4g',
+                                        key=f'{kp}o{pname}_{i}',
+                                        label_visibility='collapsed',
                                     )
                                 with pc2:
                                     osc['bounds'][pname][0] = st.number_input(
-                                        '下限', value=float(osc['bounds'][pname][0]),
-                                        step=step_val, format='%.4f',
-                                        key=f'{kp}o{pname}lo_{i}', label_visibility='collapsed')
+                                        f'{pname}_lo', value=float(osc['bounds'][pname][0]),
+                                        step=step_val, format='%.4g',
+                                        key=f'{kp}o{pname}lo_{i}',
+                                        label_visibility='collapsed')
                                 with pc3:
                                     osc['bounds'][pname][1] = st.number_input(
-                                        '上限', value=float(osc['bounds'][pname][1]),
-                                        step=step_val, format='%.4f',
-                                        key=f'{kp}o{pname}hi_{i}', label_visibility='collapsed')
+                                        f'{pname}_hi', value=float(osc['bounds'][pname][1]),
+                                        step=step_val, format='%.4g',
+                                        key=f'{kp}o{pname}hi_{i}',
+                                        label_visibility='collapsed')
 
     # ----- 6. 擬合設定 -----
     with st.expander('⚙️ 6. 擬合設定（preset 已套用，可手動覆寫）', expanded=False):

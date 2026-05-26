@@ -337,11 +337,47 @@ class Lorentz(DispersionModel):
 # =============================================================================
 
 def _drude_eps(E_eV: np.ndarray, omega_p: float, gamma: float) -> np.ndarray:
-    """Drude 自由電子貢獻
+    """Drude 自由電子貢獻 (ωp, Γ) 形式
 
     ε_D(E) = -ωₚ² / (E² + iγE)
     """
     return -omega_p**2 / (E_eV**2 + 1j * gamma * E_eV)
+
+
+# 物理常數（與 (ρ, τ) ↔ (ωp, Γ) 換算用）
+_HBAR_eV_s = 6.582119569e-16   # eV·s
+_EPS0      = 8.854187817e-12   # F/m
+
+
+def drude_rho_tau_to_omegap_gamma(rho_ohm_cm: float, tau_fs: float) -> tuple:
+    """Drude (resistivity ρ, scattering time τ) → (ωp, Γ) (WVASE 替代形式)
+
+    公式：
+        Γ  = ℏ/τ
+        ωp² = 1/(ε₀·ρ·τ)             （SI 單位內部換算）
+        ℏωp = √(ℏ²/(ε₀·ρ·τ))         （回到 eV）
+
+    輸入：
+        ρ  in Ω·cm  （典型金屬 1e-6 - 1e-3；半導體 0.01 - 1000）
+        τ  in fs    （典型金屬 5-50；半導體 1-100）
+
+    輸出：
+        ωp (eV), Γ (eV)
+
+    驗證（Au @ RT）：ρ≈2.2e-6, τ≈30 → ωp≈8.6 eV, Γ≈0.022 eV ✓
+    """
+    rho_SI = rho_ohm_cm * 0.01      # Ω·m
+    tau_SI = tau_fs * 1e-15         # s
+    gamma = _HBAR_eV_s / tau_SI
+    omega_p_sq_rad2 = 1.0 / (_EPS0 * rho_SI * tau_SI)
+    omega_p_eV = _HBAR_eV_s * np.sqrt(omega_p_sq_rad2)
+    return omega_p_eV, gamma
+
+
+def _drude_eps_rho_tau(E_eV: np.ndarray, rho_ohm_cm: float, tau_fs: float) -> np.ndarray:
+    """Drude (ρ, τ) 形式直接算 ε（內部轉成 ωp/Γ 再算）"""
+    omega_p, gamma = drude_rho_tau_to_omegap_gamma(rho_ohm_cm, tau_fs)
+    return _drude_eps(E_eV, omega_p, gamma)
 
 
 @dataclass
@@ -550,18 +586,21 @@ class GenOscOscillator:
 
     參數依類型而異（對應 WVASE GenOsc style strings）：
         lorentz / gaussian / harmonic:  (amp, en, br)  3 參數
-        drude:                          (amp, br)      2 參數，無 en（共振在 E=0）
-                                                       amp = ωp² (eV²), br = Γ (eV)
-        tauc_lorentz:                   (amp, en, br, Eg)  4 參數，Eg 為 bandgap
+        drude:        (amp, br)             2 參數，無 en（共振在 E=0）
+                                            amp = ωp² (eV²), br = Γ (eV)
+        drude_rt:     (rho, tau)            WVASE 替代，rho [Ω·cm], tau [fs]
+        tauc_lorentz: (amp, en, br, Eg)     4 參數
 
     無關參數會被忽略（不影響計算）。
     """
-    type: str             # 'lorentz' / 'gaussian' / 'drude' / 'tauc_lorentz' / 'harmonic'
-    amp: float            # Amp（所有類型都有）
-    en: float = 0.0       # En (eV)（Drude 不用）
-    br: float = 0.0       # Br (eV)（所有類型都有；Drude 為 Γ 阻尼）
+    type: str             # 'lorentz' / 'gaussian' / 'drude' / 'drude_rt' / 'tauc_lorentz' / 'harmonic'
+    amp: float = 0.0      # Amp（drude_rt 不用）
+    en: float = 0.0       # En (eV)（Drude/Drude_rt 不用）
+    br: float = 0.0       # Br (eV)（drude_rt 不用）
+    rho: float = 0.0      # Resistivity (Ω·cm)，僅 drude_rt
+    tau: float = 0.0      # Scattering time (fs)，僅 drude_rt
     active: bool = True
-    Eg: float = 0.0       # 只有 Tauc-Lorentz 用
+    Eg: float = 0.0       # 僅 Tauc-Lorentz
 
 
 # 每種振盪器需要的參數（GUI 與驗證用）
@@ -569,7 +608,8 @@ OSC_PARAMS = {
     'lorentz':       ['amp', 'en', 'br'],
     'gaussian':      ['amp', 'en', 'br'],
     'harmonic':      ['amp', 'en', 'br'],
-    'drude':         ['amp', 'br'],          # ⚠️ Drude 無 En
+    'drude':         ['amp', 'br'],          # ⚠️ Drude (ωp²,Γ) 無 En
+    'drude_rt':      ['rho', 'tau'],         # ⚠️ Drude (ρ,τ) 形式（WVASE 替代）
     'tauc_lorentz':  ['amp', 'en', 'br', 'Eg'],
 }
 
@@ -581,16 +621,26 @@ PARAM_LABELS_GENERIC = {
     'Eg':  ('Eg',  'eV', 'Tauc bandgap (能隙)'),
 }
 
-# Drude 專用標籤（物理意義不同）
+# Drude (ωp², Γ) 專用標籤
 PARAM_LABELS_DRUDE = {
     'amp': ('Amp', 'eV²', 'ωp² plasma frequency squared'),
     'br':  ('Br',  'eV',  'Γ damping (Drude 阻尼)'),
 }
 
+# Drude (ρ, τ) 形式（WVASE 替代參數化）
+PARAM_LABELS_DRUDE_RT = {
+    'rho': ('ρ',   'Ω·cm', 'Resistivity (電阻率, Au≈2.2e-6)'),
+    'tau': ('τ',   'fs',   'Scattering time (散射時間, Au≈30)'),
+}
+
 
 def osc_param_labels(osc_type: str) -> dict:
     """取得振盪器類型對應的參數標籤 dict"""
-    return PARAM_LABELS_DRUDE if osc_type == 'drude' else PARAM_LABELS_GENERIC
+    if osc_type == 'drude':
+        return PARAM_LABELS_DRUDE
+    if osc_type == 'drude_rt':
+        return PARAM_LABELS_DRUDE_RT
+    return PARAM_LABELS_GENERIC
 
 
 @dataclass
@@ -634,9 +684,13 @@ class GenOsc(DispersionModel):
                 e1_grid += eps_L.real
                 e2_grid += eps_L.imag
             elif t == 'drude':
-                # Drude 在 GenOsc 內以 (Amp, En, Br) = (ωₚ², En 忽略, Γ) 詮釋
-                # WVASE Drude osc 的標準是 Amp=ωp², Br=Γ, En 不用
+                # Drude 在 GenOsc 內以 (Amp, Br) = (ωₚ², Γ) 詮釋（無 En）
                 eps_D = _drude_eps(E_grid, np.sqrt(max(osc.amp, 0)), osc.br)
+                e1_grid += eps_D.real
+                e2_grid += eps_D.imag
+            elif t == 'drude_rt':
+                # Drude (ρ, τ) 形式 — WVASE 替代參數化
+                eps_D = _drude_eps_rho_tau(E_grid, osc.rho, osc.tau)
                 e1_grid += eps_D.real
                 e2_grid += eps_D.imag
             elif t == 'gaussian':
