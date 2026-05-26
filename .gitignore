@@ -38,6 +38,12 @@ Thumbs.db
 # Claude Code workspace
 .claude/
 
+# 真實實驗資料（不公開）
+data/NbTiN/
+data/private/
+*.env
+COMMIT_MSG
+
 # 但保留 example 與測試資料
 !config.example.yaml
 !data/
