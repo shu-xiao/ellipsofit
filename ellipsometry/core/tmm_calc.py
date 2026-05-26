@@ -31,6 +31,7 @@ import tmm
 
 from .dispersion import DispersionModel
 from .units import nm_to_eV
+from .tmm_vec import ellips_vec, coh_tmm_vec
 
 
 # =============================================================================
@@ -145,32 +146,35 @@ def calculate(layers: list[Layer],
     has_incoherent = any(c == 'i' for c in c_R[1:-1]) or \
                      (substrate_finite and 'i' in c_R[-2:])
 
-    for i, wlam in enumerate(wl):
-        n_list = [arr[i] for arr in n_arrays_R]
+    # ★ 向量化：對每個 AOI 一次處理所有波長（127× 加速 vs 純量 tmm）
+    for j, theta in enumerate(aoi_rad):
+        # ellips_vec 全波長同時算 → Ψ, Δ
+        r_ell = ellips_vec(n_arrays_R, d_R, theta, wl)
+        delta[:, j] = np.rad2deg(r_ell['Delta'])
 
-        # 反射：每個 AOI
-        for j, theta in enumerate(aoi_rad):
-            # 加速 A：一次 ellips 同時得到 Ψ 與 Δ（coherent stack 用完整堆疊保持一致）
-            r_ell = tmm.ellips(n_list, d_R, theta, wlam)
-            delta[i, j] = np.rad2deg(r_ell['Delta'])
-
-            if has_incoherent:
-                # 含 incoherent → Ψ 用 inc_tmm 取強度比（背面反射效應）
+        if has_incoherent:
+            # 含 incoherent → 仍需 inc_tmm 算 Ψ 強度修正
+            # 此部分尚未向量化（複雜），用 scalar loop
+            for i, wlam in enumerate(wl):
+                n_list = [arr[i] for arr in n_arrays_R]
                 rs = tmm.inc_tmm('s', n_list, d_R, c_R, theta, wlam)
                 rp = tmm.inc_tmm('p', n_list, d_R, c_R, theta, wlam)
                 Rs, Rp = rs['R'], rp['R']
                 psi[i, j] = np.rad2deg(np.arctan(np.sqrt(max(Rp / max(Rs, 1e-30), 0))))
                 if compute_R:
                     R_unp[i, j] = 0.5 * (Rs + Rp)
-            else:
-                psi[i, j] = np.rad2deg(r_ell['psi'])
-                if compute_R:
-                    res_s = tmm.coh_tmm('s', n_list, d_R, theta, wlam)
-                    res_p = tmm.coh_tmm('p', n_list, d_R, theta, wlam)
-                    R_unp[i, j] = 0.5 * (res_s['R'] + res_p['R'])
+        else:
+            # 全相干 → Ψ 直接用向量化 ellips 結果
+            psi[:, j] = np.rad2deg(r_ell['psi'])
+            if compute_R:
+                Rs_vec = np.abs(r_ell['r_s'])**2
+                Rp_vec = np.abs(r_ell['r_p'])**2
+                R_unp[:, j] = 0.5 * (Rs_vec + Rp_vec)
 
-        # 穿透：normal incidence
-        if compute_transmission and substrate_finite:
+    # 穿透：normal incidence (仍 scalar，掃過所有波長)
+    if compute_transmission and substrate_finite:
+        for i, wlam in enumerate(wl):
+            n_list = [arr[i] for arr in n_arrays_R]
             inc = tmm.inc_tmm('s', n_list, d_R, c_R, 0.0, wlam)
             T[i] = inc['T']
 
