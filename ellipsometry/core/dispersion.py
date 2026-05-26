@@ -874,17 +874,40 @@ class MaterialLibrary:
         else:
             real_name = 'Al2O3' if name == 'sapphire' else name
             path = cls._MATERIALS_DIR / f'{real_name}.csv'
-            if not path.exists():
-                raise FileNotFoundError(
-                    f'材料 "{name}" 找不到。可用：{cls.list_available()}')
-            model = Pointwise.from_csv(path, method=method, name=name)
+            if path.exists():
+                model = Pointwise.from_csv(path, method=method, name=name)
+            else:
+                # 試找對應的 WVASE .mat 檔（data/substrate/）
+                mat_path = cls._find_wvase_mat(real_name)
+                if mat_path:
+                    from .wvase_mat import read_wvase_mat
+                    model = read_wvase_mat(mat_path)
+                else:
+                    raise FileNotFoundError(
+                        f'材料 "{name}" 找不到。可用：{cls.list_available()}')
 
         cls._cache[key] = model
         return model
 
     @classmethod
+    def _find_wvase_mat(cls, name: str):
+        """在 data/substrate/ 找 .mat 檔（大小寫不敏感）"""
+        substrate_dir = cls._MATERIALS_DIR.parent / 'data' / 'substrate'
+        if not substrate_dir.exists():
+            return None
+        for f in substrate_dir.glob('*.mat'):
+            if f.stem.lower() == name.lower():
+                return f
+        return None
+
+    @classmethod
     def list_available(cls) -> list:
-        return sorted({p.stem for p in cls._MATERIALS_DIR.glob('*.csv')})
+        csv_mats = {p.stem for p in cls._MATERIALS_DIR.glob('*.csv')}
+        # 加上 data/substrate/ 的 .mat 檔
+        substrate_dir = cls._MATERIALS_DIR.parent / 'data' / 'substrate'
+        if substrate_dir.exists():
+            csv_mats.update(p.stem for p in substrate_dir.glob('*.mat'))
+        return sorted(csv_mats)
 
 
 # =============================================================================

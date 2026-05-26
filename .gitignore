@@ -38,10 +38,12 @@ Thumbs.db
 # Claude Code workspace
 .claude/
 
-# 真實實驗資料（不公開）
+# 真實實驗資料 / WVASE 原始檔（不公開，使用者自己留本地）
 data/NbTiN/
+data/substrate/
 data/private/
 *.env
+*.mat
 COMMIT_MSG
 
 # 但保留 example 與測試資料

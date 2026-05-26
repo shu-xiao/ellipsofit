@@ -58,6 +58,39 @@ MATERIALS = {
     ],
 }
 
+# Sellmeier 公式直接產生（不從 refractiveindex.info 下載）
+# 對應 WVASE 'sapphire_e_sell' / 'sapphire_o_sell' .mat 模型
+SELLMEIER_MATERIALS = {
+    'Sapphire_o_Sellmeier': {
+        'citation': 'Malitson 1962, J. Opt. Soc. Am. 52, 1377 (ordinary axis)',
+        'note': 'Sellmeier 公式，對應 WVASE sapphire_o_sell.mat',
+        'coeffs': [(1.4313493, 0.0726631), (0.65054713, 0.1193242), (5.3414021, 18.028251)],
+    },
+    'Sapphire_e_Sellmeier': {
+        'citation': 'Malitson 1962, J. Opt. Soc. Am. 52, 1377 (extraordinary axis)',
+        'note': 'Sellmeier 公式，對應 WVASE sapphire_e_sell.mat',
+        'coeffs': [(1.5039759, 0.0740288), (0.55069141, 0.1216529), (6.5927379, 20.072248)],
+    },
+}
+
+
+def make_sellmeier_csv(name: str, coeffs: list, wl_min_nm=150, wl_max_nm=5000):
+    """從 Sellmeier 係數產生 nk csv（k=0，透明區）"""
+    import numpy as np
+    wl_nm = np.arange(wl_min_nm, wl_max_nm + 1, 1, dtype=float)
+    wl_um = wl_nm / 1000.0
+    n_sq = np.ones_like(wl_um)
+    for B, C in coeffs:
+        n_sq += B * wl_um**2 / (wl_um**2 - C**2)
+    n = np.sqrt(n_sq)
+    k = np.zeros_like(n)
+    path = os.path.join(OUT_DIR, f'{name}.csv')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('wavelength_nm,n,k\n')
+        for w, nn, kk in zip(wl_nm, n, k):
+            f.write(f'{w:.4f},{nn:.6f},{kk:.6f}\n')
+    return path, len(wl_nm), (wl_nm[0], wl_nm[-1])
+
 # 別名：sapphire 即 Al2O3 (單晶剛玉)
 ALIASES = {
     'sapphire': 'Al2O3',
