@@ -827,9 +827,17 @@ def create_dispersion(spec) -> DispersionModel:
 
         oscs = []
         for o in oscs_raw:
+            # 用 .get 避免 KeyError（每類型需要的欄位不同：Drude 無 en，
+            # drude_rt 用 rho/tau 而非 amp/en/br）
             oscs.append(GenOscOscillator(
-                type=o['type'], amp=o['amp'], en=o['en'], br=o['br'],
-                active=o.get('active', True), Eg=o.get('Eg', 0.0),
+                type=o['type'],
+                amp=o.get('amp', 0.0),
+                en=o.get('en', 0.0),
+                br=o.get('br', 0.0),
+                rho=o.get('rho', 0.0),
+                tau=o.get('tau', 0.0),
+                active=o.get('active', True),
+                Eg=o.get('Eg', 0.0),
             ))
         return GenOsc(
             e1_offset=layer.get('e1_offset', 1.0),
