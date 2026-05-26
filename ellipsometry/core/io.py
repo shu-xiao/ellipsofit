@@ -144,6 +144,8 @@ def read_reflection(path: str | Path, format: str = 'auto') -> EllipsometryData:
     if format == 'auto':
         format = _detect_format(path)
 
+    if format == 'wvase_real':
+        return _read_wvase_real(path)
     if format == 'wvase_long':
         return _read_wvase_long(path)
     if format == 'wvase_wide':
@@ -158,11 +160,25 @@ def read_reflection(path: str | Path, format: str = 'auto') -> EllipsometryData:
 
 
 def read_transmission(path: str | Path) -> TransmissionData:
-    """讀穿透資料（兩欄：wavelength_nm, T；或三欄含 sigma）"""
+    """讀穿透資料
+
+    支援兩種格式：
+        簡易：兩欄 nm,T（或三欄含 σ）
+        WVASE 真實：開頭 't' + RTmethod[...]，欄位
+            <pT>  <nm>  <AOI>  <T>  <σ_T>
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f'找不到檔案：{path}')
 
+    # 偵測是否為 WVASE 真實格式
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        head = ''.join([next(f, '') for _ in range(5)])
+
+    if re.search(r'RTmethod\[', head):
+        return _read_transmission_wvase_real(path)
+
+    # 簡易格式：直接 pandas
     df = _fast_load(path)
     if df.shape[1] < 2:
         raise ValueError(f'穿透檔需至少 2 欄 (nm, T)，實際 {df.shape[1]} 欄')
@@ -171,11 +187,68 @@ def read_transmission(path: str | Path) -> TransmissionData:
     T = df.iloc[:, 1].to_numpy()
     sigma_T = df.iloc[:, 2].to_numpy() if df.shape[1] >= 3 else None
 
-    # 若 T 在 0-100 範圍（百分比），自動轉成 0-1
     if T.max() > 1.5:
         T = T / 100.0
         if sigma_T is not None:
             sigma_T = sigma_T / 100.0
+
+    return TransmissionData(
+        wavelength=wavelength, T=T, sigma_T=sigma_T,
+        angle=0.0, source=str(path),
+    )
+
+
+def _read_transmission_wvase_real(path: Path) -> TransmissionData:
+    """WVASE 真實 T 檔：
+        t
+        RTmethod[...]
+        Original[...]
+        nm
+        pT  <nm>  <AOI>  <T>  <σ_T>
+    """
+    rows = []
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            parts = line.strip().split()
+            if not parts:
+                continue
+            # 第一欄如果是 'pT' / 'sT' 等字母前綴 → 跳過該欄
+            try:
+                vals = list(map(float, parts))
+            except ValueError:
+                if len(parts) >= 5 and parts[0] in ('pT', 'sT', 'T'):
+                    try:
+                        vals = list(map(float, parts[1:]))
+                    except ValueError:
+                        continue
+                else:
+                    continue
+            rows.append(vals)
+
+    arr = np.array(rows)
+    if arr.size == 0:
+        raise ValueError(f'找不到數據於 {path}')
+
+    # 預期欄位：nm AOI T σ_T  → 取 col 0=nm, 2=T, 3=σ_T（AOI=0 忽略）
+    wavelength = arr[:, 0]
+    if arr.shape[1] >= 4:
+        T = arr[:, 2]
+        sigma_T = arr[:, 3]
+    else:
+        T = arr[:, 1]
+        sigma_T = None
+
+    # 排序
+    s = np.argsort(wavelength)
+    wavelength = wavelength[s]
+    T = T[s]
+    if sigma_T is not None:
+        sigma_T = sigma_T[s]
+
+    if T.max() > 1.5:
+        T /= 100.0
+        if sigma_T is not None:
+            sigma_T /= 100.0
 
     return TransmissionData(
         wavelength=wavelength, T=T, sigma_T=sigma_T,
@@ -191,10 +264,13 @@ _AOI_PATTERN = re.compile(r'AOI\s*=\s*([\d.]+)', re.IGNORECASE)
 
 
 def _detect_format(path: Path) -> str:
-    """偵測檔案格式：wvase_long / wvase_wide"""
+    """偵測檔案格式：wvase_real / wvase_long / wvase_wide"""
     with open(path, 'r', encoding='utf-8', errors='ignore') as f:
         head = ''.join([next(f, '') for _ in range(50)])
 
+    # WVASE 真實檔：開頭 'r' 或 't'，第 2 行 VASEmethod[...] 或 RTmethod[...]
+    if re.search(r'(VASEmethod|RTmethod)\[', head):
+        return 'wvase_real'
     if _AOI_PATTERN.search(head):
         return 'wvase_long'
     # 看 header 有沒有 Psi_xx / Del_xx 之類的欄位
@@ -310,6 +386,96 @@ def _read_wvase_long(path: Path) -> EllipsometryData:
 
     return EllipsometryData(
         wavelength=ref_w, angles=angles,
+        psi=psi, delta=delta,
+        sigma_psi=sigma_psi, sigma_delta=sigma_delta,
+        source=str(path),
+    )
+
+
+# =============================================================================
+# 內部：WVASE 真實格式（VASEmethod[...] header + AOI 為欄位）
+# =============================================================================
+
+def _read_wvase_real(path: Path) -> EllipsometryData:
+    """讀真實 WVASE 匯出格式
+
+        r                                          ← 檔頭 'r' (反射) 或 't' (穿透)
+        VASEmethod[...]                            ← 儀器設定元資料
+        Original[xxx.dat]                          ← 原始檔名
+        nm                                         ← 波長單位
+        <nm>  <AOI>  <Psi>  <Delta>  <σ_Psi>  <σ_Delta>
+        ...
+    """
+    rows = []
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # 跳過 header 行（非數字開頭）
+            first = line.split()[0]
+            try:
+                float(first)
+            except ValueError:
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            try:
+                vals = list(map(float, parts))
+            except ValueError:
+                continue
+            rows.append(vals)
+
+    if not rows:
+        raise ValueError(f'找不到任何數據行於 {path}')
+
+    arr = np.array(rows)
+    if arr.shape[1] < 4:
+        raise ValueError(f'欄位 < 4（需 nm AOI Psi Delta）: shape={arr.shape}')
+
+    # 依 AOI 分組
+    wl_all = arr[:, 0]
+    aoi_all = arr[:, 1]
+    psi_all = arr[:, 2]
+    delta_all = arr[:, 3]
+    has_sigma = arr.shape[1] >= 6
+    if has_sigma:
+        sp_all = arr[:, 4]
+        sd_all = arr[:, 5]
+
+    unique_aois = sorted(np.unique(aoi_all).tolist())
+    # 用第一個 AOI 的波長作基準
+    mask0 = aoi_all == unique_aois[0]
+    ref_wl = wl_all[mask0]
+    # 排序
+    sort = np.argsort(ref_wl)
+    ref_wl = ref_wl[sort]
+    Nw = len(ref_wl)
+    Nang = len(unique_aois)
+
+    psi = np.zeros((Nw, Nang))
+    delta = np.zeros((Nw, Nang))
+    sigma_psi = np.zeros((Nw, Nang)) if has_sigma else None
+    sigma_delta = np.zeros((Nw, Nang)) if has_sigma else None
+
+    for j, aoi in enumerate(unique_aois):
+        m = aoi_all == aoi
+        w = wl_all[m]
+        # 按波長排序保持一致
+        s = np.argsort(w)
+        if not np.allclose(w[s], ref_wl):
+            raise ValueError(
+                f'AOI={aoi}° 的波長與第一個 AOI 不一致 '
+                f'(Nw={len(w)} vs {Nw})')
+        psi[:, j] = psi_all[m][s]
+        delta[:, j] = delta_all[m][s]
+        if has_sigma:
+            sigma_psi[:, j] = sp_all[m][s]
+            sigma_delta[:, j] = sd_all[m][s]
+
+    return EllipsometryData(
+        wavelength=ref_wl, angles=unique_aois,
         psi=psi, delta=delta,
         sigma_psi=sigma_psi, sigma_delta=sigma_delta,
         source=str(path),
