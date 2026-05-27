@@ -822,7 +822,191 @@ if (st.session_state.fit_thread is not None
     st.session_state.fit_result_box = None
 
 
-# ----- 結果顯示 -----
+# =============================================================================
+# 即時預覽區：永遠顯示（GenOsc 模式時最有用）— 對應 WVASE「拖振盪器看 ε」
+# =============================================================================
+
+def _render_live_preview():
+    """根據 sidebar 當前參數即時計算 model ε，疊在 pseudo-ε 上對比"""
+    if st.session_state.data is None:
+        return
+
+    # 判斷有沒有 GenOsc film（其他類型 nk 是固定的，預覽用處不大）
+    has_genosc = any(f['material_source'] == 'GenOsc (擬合模型)'
+                     for f in st.session_state.films)
+    if not has_genosc:
+        return
+
+    from ellipsometry.core.tmm_calc import pseudo_epsilon
+    from ellipsometry.core.units import nm_to_eV
+    from ellipsometry.core.dispersion import create_dispersion
+
+    d = st.session_state.data
+    # 截取波長範圍與 sidebar 一致
+    try:
+        d = d.crop_wavelength(*wl_range)
+    except Exception:
+        pass
+
+    st.subheader('🎚️ 即時模型預覽（調 sidebar 參數同步更新）')
+    st.caption('💡 對齊 **量測 ε₂ 峰位置** 是設振盪器初始值的關鍵。'
+               '把模型 ε₂ 拖到接近量測 ε₂，再按下方「開始擬合」會收斂得更好。')
+
+    # X 軸單位切換
+    col_t, col_u = st.columns([3, 1])
+    with col_u:
+        prev_unit = st.radio(
+            'X', options=['nm', 'eV'], horizontal=True,
+            label_visibility='collapsed', key='_prev_unit',
+        )
+
+    E_arr = nm_to_eV(d.wavelength)
+    if prev_unit == 'nm':
+        X_arr, x_label = d.wavelength, 'Wavelength (nm)'
+    else:
+        X_arr, x_label = E_arr, 'Energy (eV)'
+
+    # === 對每個 GenOsc 薄膜建一個 tab ===
+    genosc_films = [(i, f) for i, f in enumerate(st.session_state.films)
+                    if f['material_source'] == 'GenOsc (擬合模型)']
+
+    if len(genosc_films) > 1:
+        tabs = st.tabs([f'#{i+1} {f["name"]}' for i, f in genosc_films])
+    else:
+        tabs = [st.container()]
+
+    for (fi, film), tab in zip(genosc_films, tabs):
+        with tab:
+            # 從 sidebar 設定建 current model
+            go_cfg = film['gen_osc']
+            mat_spec = {
+                'model': 'gen_osc',
+                'layer': {
+                    'e1_offset': go_cfg['e1_offset'],
+                    'egap': go_cfg['egap'],
+                    'poles': {},
+                },
+                'oscillators': [
+                    {'type': o['type'],
+                     'amp': o.get('amp', 0.0),
+                     'en':  o.get('en', 0.0),
+                     'br':  o.get('br', 0.0),
+                     'rho': o.get('rho', 0.0),
+                     'tau': o.get('tau', 0.0),
+                     'Eg':  o.get('Eg', 0.0),
+                     'active': o['active']}
+                    for o in go_cfg['oscillators']
+                ],
+            }
+            if go_cfg['uv_pole']['use']:
+                mat_spec['layer']['poles']['uv'] = {
+                    'position': go_cfg['uv_pole']['position'],
+                    'magnitude': go_cfg['uv_pole']['magnitude'],
+                }
+            if go_cfg['ir_pole']['use']:
+                mat_spec['layer']['poles']['ir'] = {
+                    'position': go_cfg['ir_pole']['position'],
+                    'magnitude': go_cfg['ir_pole']['magnitude'],
+                }
+            try:
+                current_model = create_dispersion(mat_spec)
+                model_eps = current_model.epsilon(d.wavelength)
+            except Exception as e:
+                st.error(f'模型計算失敗: {e}')
+                continue
+
+            # ε₁, ε₂ 並列圖
+            fig = make_subplots(rows=1, cols=2,
+                                subplot_titles=('ε₁', 'ε₂'),
+                                shared_xaxes=False)
+
+            # 1) Measured pseudo-ε (3 AOI, semi-transparent markers)
+            aoi_colors = ['#888888', '#aaaaaa', '#cccccc']  # 灰階
+            for j, ang in enumerate(d.angles):
+                eps_p = pseudo_epsilon(d.psi[:, j], d.delta[:, j], ang, 'tmm')
+                fig.add_trace(go.Scatter(
+                    x=X_arr, y=eps_p.real,
+                    name=f'<ε₁> meas {ang}°',
+                    mode='markers',
+                    marker=dict(size=3, color=aoi_colors[j % 3], opacity=0.5),
+                    showlegend=(j == 0),
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=X_arr, y=eps_p.imag,
+                    name=f'<ε₂> meas {ang}°',
+                    mode='markers',
+                    marker=dict(size=3, color=aoi_colors[j % 3], opacity=0.5),
+                    showlegend=False,
+                ), row=1, col=2)
+
+            # 2) Current model ε (粗紅線，醒目)
+            fig.add_trace(go.Scatter(
+                x=X_arr, y=model_eps.real, name='Model ε₁',
+                mode='lines', line=dict(color='red', width=2.5),
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=X_arr, y=model_eps.imag, name='Model ε₂',
+                mode='lines', line=dict(color='red', width=2.5),
+            ), row=1, col=2)
+
+            # 3) 每個 active 振盪器的中心能量豎線
+            for i, osc in enumerate(go_cfg['oscillators']):
+                if not osc.get('active', True):
+                    continue
+                if osc['type'] in ('drude', 'drude_rt'):
+                    continue   # Drude 沒有 En
+                en_val = osc.get('en', 0)
+                if en_val <= 0:
+                    continue
+                x_marker = en_val if prev_unit == 'eV' else 1239.84 / en_val
+                # 範圍內才畫
+                if X_arr.min() <= x_marker <= X_arr.max():
+                    for col in (1, 2):
+                        fig.add_vline(
+                            x=x_marker, line_width=1,
+                            line_dash='dash', line_color='orange',
+                            row=1, col=col,
+                        )
+
+            fig.update_xaxes(title_text=x_label)
+            fig.update_yaxes(title_text='ε₁', row=1, col=1)
+            fig.update_yaxes(title_text='ε₂', row=1, col=2)
+            fig.update_layout(height=400, hovermode='x unified',
+                              showlegend=True,
+                              legend=dict(yanchor='top', y=0.99,
+                                          xanchor='left', x=0.01))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # 快速指引
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric('振盪器數', sum(1 for o in go_cfg['oscillators']
+                                       if o.get('active', True)))
+            cc2.metric('Model ε₂ peak',
+                       f'{model_eps.imag.max():.2f}')
+            # Pseudo ε₂ peak (75°)
+            eps_p_75 = pseudo_epsilon(d.psi[:, -1], d.delta[:, -1],
+                                       d.angles[-1], 'tmm')
+            cc3.metric('Measured <ε₂> peak',
+                       f'{eps_p_75.imag.max():.2f}')
+
+            with st.expander('💡 調參數小撇步'):
+                st.markdown('''
+                - **看 ε₂ 峰位置** → 設 oscillator `En` (橙色虛線顯示中心)
+                - **看 ε₂ 峰寬度** → 設 `Br`
+                - **看 ε₂ 峰高度** → 設 `Amp`
+                - **背景 ε₁** → 用 e1_offset + UV pole
+                - 低能量 (IR) ε₁ 很大 → Drude 或 IR pole
+                - 量測 `<ε>` 是「視在介電函數」，**形狀對位置對**但**強度不精確**
+                  （真實薄膜 ε 強度不同；fit 完看「薄膜 ε」tab 才是真值）
+                ''')
+
+
+_render_live_preview()
+
+
+# =============================================================================
+# 結果顯示
+# =============================================================================
 result = st.session_state.fit_result
 
 if result is None:
