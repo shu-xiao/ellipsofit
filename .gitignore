@@ -46,6 +46,9 @@ data/private/
 *.mat
 COMMIT_MSG
 
+# 第三方 PDF 文件 / 拆分檔 / 索引（版權問題，不上 GitHub，本機留存）
+docs/references/
+
 # 但保留 example 與測試資料
 !config.example.yaml
 !data/
